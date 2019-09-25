@@ -1,0 +1,12 @@
+{
+	"authors": [
+		"bobalus"
+	],
+	"copyright": "Copyright © 2019, bobalus",
+	"dependencies": {
+		"tinyredis": "~>2.2.1"
+	},
+	"description": "Client library for dobaos worker",
+	"license": "Beerware",
+	"name": "dobaos_d"
+}
