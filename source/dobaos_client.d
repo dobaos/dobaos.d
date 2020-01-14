@@ -4,6 +4,7 @@ import std.functional;
 import std.json;
 import std.stdio;
 import std.string;
+import std.datetime.stopwatch;
 
 import tinyredis;
 import tinyredis.subscriber;
@@ -20,19 +21,24 @@ class DobaosClient {
 
   private string last_channel;
   private JSONValue response;
+  
+  private int req_timeout;
 
   this(string redis_host = "127.0.0.1", 
       ushort redis_port = 6379,
       string req_channel = "dobaos_req",
       string bcast_channel = "dobaos_cast",
       string service_channel = "dobaos_service",
-      string service_bcast = "dobaos_cast") {
+      string service_bcast = "dobaos_cast",
+      int req_timeout = 5000
+      ) {
 
     this.redis_host = redis_host;
     this.redis_port = redis_port;
     this.req_channel = req_channel;
     this.bcast_channel = bcast_channel;
     this.service_channel = service_channel;
+    this.req_timeout = req_timeout;
 
         // init publisher
     pub = new Redis(redis_host, redis_port);
@@ -114,8 +120,11 @@ class DobaosClient {
     jreq["response_channel"] = last_channel;
     pub.send("PUBLISH", channel, jreq.toJSON());
 
-    while(!res_received) {
+    auto sw = StopWatch(AutoStart.yes);
+    auto dur = sw.peek();
+    while(!res_received && dur < msecs(req_timeout)) {
       sub.processMessages();
+      dur = sw.peek();
     }
 
     return response;
