@@ -1,5 +1,6 @@
 module dobaos_client;
 
+import std.base64;
 import std.functional;
 import std.json;
 import std.stdio;
@@ -177,6 +178,14 @@ class DobaosClient {
     JSONValue payload = parseJSON("{}");
     payload["id"] = id;
     payload["value"] = value;
+
+    return commonRequest(req_channel, "set value", payload);
+  }
+  // raw
+  public JSONValue setValue(ushort id, ubyte[] value) {
+    JSONValue payload = parseJSON("{}");
+    payload["id"] = id;
+    payload["raw"] = Base64.encode(value);
 
     return commonRequest(req_channel, "set value", payload);
   }

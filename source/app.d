@@ -7,7 +7,7 @@ import dobaos_client;
 
 void main()
 {
-  auto dob = new DobaosClient();
+  auto dob = new DobaosClient("10.0.42.6");
   writeln("+====descriptions====+");
   writeln(dob.getDescription());
   writeln("+====values====+");
@@ -30,6 +30,9 @@ void main()
   writeln(dob.setValue(2, JSONValue(false)));
   writeln("+====set value====+");
   writeln(dob.setValue(2, JSONValue(1)));
+  // raw value
+  writeln(dob.setValue(10, [10, 10, 10]));
+  writeln(dob.setValue(2, [0, 1]));
 
   // register listener for broadcasted datapoint values
   void processValue(const JSONValue value) {
