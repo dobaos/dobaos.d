@@ -193,6 +193,25 @@ class DobaosClient {
     return commonRequest(req_channel, "set value", values);
   }
 
+  public JSONValue putValue(ushort id, JSONValue value) {
+    JSONValue payload = parseJSON("{}");
+    payload["id"] = id;
+    payload["value"] = value;
+
+    return commonRequest(req_channel, "put value", payload);
+  }
+  // raw
+  public JSONValue putValue(ushort id, ubyte[] value) {
+    JSONValue payload = parseJSON("{}");
+    payload["id"] = id;
+    payload["raw"] = Base64.encode(value);
+
+    return commonRequest(req_channel, "put value", payload);
+  }
+  public JSONValue putValue(JSONValue values) {
+    return commonRequest(req_channel, "put value", values);
+  }
+
   public JSONValue getServerItems() {
     JSONValue payload = null;
 
