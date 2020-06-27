@@ -14,7 +14,7 @@ class DobaosClient {
   private Redis pub;
   private Subscriber sub;
   private Subscriber sub_cast;
-  private string redis_host, req_channel, bcast_channel, service_channel;
+  private string redis_host, req_channel, bcast_channel;
   private ushort redis_port;
 
   private bool res_received = false;
@@ -29,8 +29,6 @@ class DobaosClient {
       ushort redis_port = 6379,
       string req_channel = "dobaos_req",
       string bcast_channel = "dobaos_cast",
-      string service_channel = "dobaos_service",
-      string service_bcast = "dobaos_cast",
       int req_timeout = 5000
       ) {
 
@@ -38,7 +36,6 @@ class DobaosClient {
     this.redis_port = redis_port;
     this.req_channel = req_channel;
     this.bcast_channel = bcast_channel;
-    this.service_channel = service_channel;
     this.req_timeout = req_timeout;
 
         // init publisher
@@ -162,6 +159,16 @@ class DobaosClient {
 
     return commonRequest(req_channel, "get value", payload);
   }
+  public JSONValue getStored(ushort id) {
+    JSONValue payload = id;
+
+    return commonRequest(req_channel, "get stored", payload);
+  }
+  public JSONValue getStored(ushort[] id) {
+    JSONValue payload = id;
+
+    return commonRequest(req_channel, "get stored", payload);
+  }
 
   public JSONValue readValue(ushort id) {
     JSONValue payload = id;
@@ -239,12 +246,12 @@ class DobaosClient {
   public JSONValue getVersion() {
     JSONValue payload = null;
 
-    return commonRequest(service_channel, "version", payload);
+    return commonRequest(req_channel, "version", payload);
   }
 
   public JSONValue reset() {
     JSONValue payload = null;
 
-    return commonRequest(service_channel, "reset", payload);
+    return commonRequest(req_channel, "reset", payload);
   }
 }
