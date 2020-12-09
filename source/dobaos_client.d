@@ -1,14 +1,41 @@
 module dobaos_client;
 
+import core.thread;
+
 import std.base64;
+import std.conv;
+import std.datetime.stopwatch;
 import std.functional;
 import std.json;
+import std.random;
 import std.stdio;
 import std.string;
-import std.datetime.stopwatch;
 
 import tinyredis;
 import tinyredis.subscriber;
+
+enum Errors: string {
+  TIMEOUT = "ERR_TIMEOUT"
+}
+
+enum Methods: string {
+  get_description = "get description",
+  get_value = "get value",
+  get_stored = "get stored",
+  read_value = "read value",
+  set_value = "set value",
+  put_value = "put value",
+  get_server_items = "get server items",
+  get_programming_mode = "get programming mode",
+  set_programming_mode = "set programming mode",
+  get_version = "version",
+  reset = "reset",
+  success = "success",
+  error = "error",
+  on_datapoint_value = "datapoint value",
+  on_sdk_init = "sdk init",
+  on_sdk_reset = "sdk reset"
+}
 
 class DobaosClient {
   private Redis pub;
@@ -23,13 +50,19 @@ class DobaosClient {
   private string last_channel;
   private JSONValue response;
   
-  private int req_timeout;
+  private Duration req_timeout;
+  private Random rnd;
+
+  public void delegate() onInit;
+  public void delegate() onSdkInit;
+  public void delegate() onSdkReset;
+  public void delegate(JSONValue) onDatapointValue;
 
   this(string redis_host = "127.0.0.1", 
       ushort redis_port = 6379,
       string req_channel = "dobaos_req",
       string bcast_channel = "dobaos_cast",
-      int req_timeout = 5000
+      Duration req_timeout = 5000.msecs
       ) {
 
     this.redis_host = redis_host;
@@ -37,12 +70,14 @@ class DobaosClient {
     this.req_channel = req_channel;
     this.bcast_channel = bcast_channel;
     this.req_timeout = req_timeout;
+  }
 
-        // init publisher
+  public void init() {
+    // init publisher
     pub = new Redis(redis_host, redis_port);
+
     // now handle message
-    void handleMessage(string pattern, string channel, string message)
-    {
+    void handleResponse(string pattern, string channel, string message) {
       try {
         if (channel != last_channel) {
           return;
@@ -67,40 +102,51 @@ class DobaosClient {
       } 
     }
     sub = new Subscriber(redis_host, redis_port);
-    sub.psubscribe(res_pattern, toDelegate(&handleMessage));
-  }
+    sub.psubscribe(res_pattern, toDelegate(&handleResponse));
 
-  public void onDatapointValue(void delegate(const JSONValue) handler) {
-    void handleMessage(string channel, string message)
-    {
+    void handleBroadcast(string channel, string message) {
       try {
-        JSONValue jres = parseJSON(message);
+        JSONValue j = parseJSON(message);
 
         // check if response is object
-        if (jres.type() != JSONType.object) {
+        if (j.type != JSONType.object) {
           return;
         }
         // check if response has method field
-        auto jmethod = ("method" in jres);
+        auto jmethod = ("method" in j);
         if (jmethod is null) {
           return;
         }
-        if ((*jmethod).str != "datapoint value") {
-          return;
-        }
+        auto jpayload = ("payload" in j);
 
-        auto jpayload = ("payload" in jres);
-        if (jpayload is null) {
-          return;
+        string method = (*jmethod).str;
+        switch(method) {
+          case Methods.on_datapoint_value:
+            if (jpayload is null) {
+              return;
+            }
+            if (onDatapointValue !is null)
+              onDatapointValue(*jpayload);
+            break;
+          case Methods.on_sdk_init:
+            if (onSdkInit !is null)
+              onSdkInit();
+            break;
+          case Methods.on_sdk_reset:
+            if (onSdkReset !is null)
+              onSdkReset();
+            break;
+          default:
+            break;
         }
-
-        handler(*jpayload);
       } catch(Exception e) {
         //writeln("error parsing json: %s ", e.msg);
       } 
     }
     sub_cast = new Subscriber(redis_host, redis_port);
-    sub_cast.subscribe(bcast_channel, toDelegate(&handleMessage));
+    sub_cast.subscribe(bcast_channel, toDelegate(&handleBroadcast));
+    if (onInit !is null)
+       onInit();
   }
 
   public void processMessages() {
@@ -110,7 +156,9 @@ class DobaosClient {
   private JSONValue commonRequest(string channel, string method, JSONValue payload) {
     res_received = false;
     response = null;
-    last_channel = res_pattern.replace("*", "42");
+
+    int rnum = uniform(0, 65535, rnd);
+    last_channel = res_pattern.replace("*", to!string(rnum));
 
     JSONValue jreq = parseJSON("{}");
     jreq["method"] = method;
@@ -120,138 +168,131 @@ class DobaosClient {
 
     auto sw = StopWatch(AutoStart.yes);
     auto dur = sw.peek();
-    while(!res_received && dur < msecs(req_timeout)) {
+    bool timeout = dur > req_timeout;
+    while(!res_received && !timeout) {
       sub.processMessages();
-      dur = sw.peek();
+      timeout = sw.peek() > req_timeout;
+      if (timeout) {
+        sw.stop();
+        throw new Exception(Errors.TIMEOUT);
+      }
+      Thread.sleep(1.msecs);
+    }
+    if (response["method"].str == Methods.error) {
+      throw new Exception(response["payload"].str);
     }
 
-    return response;
+    return response["payload"];
   }
 
-  public JSONValue getDescription() {
-    JSONValue payload = null;
-
-    return commonRequest(req_channel, "get description", payload);
+  public JSONValue getDescription(JSONValue payload) {
+    return commonRequest(req_channel, Methods.get_description, payload);
   }
-  public JSONValue getDescription(ushort id) {
-    JSONValue payload = id;
+  public JSONValue getDescription() { return getDescription(JSONValue(null)); }
+  public JSONValue getDescription(ushort id) { return getDescription(JSONValue(id)); }
+  public JSONValue getDescription(ushort[] id) { return getDescription(JSONValue(id)); }
+  public JSONValue getDescription(int id) { return getDescription(JSONValue(id)); }
+  public JSONValue getDescription(int[] id) { return getDescription(JSONValue(id)); }
+  public JSONValue getDescription(string id) { return getDescription(JSONValue(id)); }
+  public JSONValue getDescription(string[] id) { return getDescription(JSONValue(id)); }
 
-    return commonRequest(req_channel, "get description", payload);
+  public JSONValue getValue(JSONValue payload) {
+    return commonRequest(req_channel, Methods.get_value, payload);
   }
-  public JSONValue getDescription(ushort[] id) {
-    JSONValue payload = id;
+  public JSONValue getValue() { return getValue(JSONValue(null)); }
+  public JSONValue getValue(ushort id) { return getValue(JSONValue(id)); }
+  public JSONValue getValue(ushort[] id) { return getValue(JSONValue(id)); }
+  public JSONValue getValue(int id) { return getValue(JSONValue(id)); }
+  public JSONValue getValue(int[] id) { return getValue(JSONValue(id)); }
+  public JSONValue getValue(string id) { return getValue(JSONValue(id)); }
+  public JSONValue getValue(string[] id) { return getValue(JSONValue(id)); }
 
-    return commonRequest(req_channel, "get description", payload);
+  public JSONValue getStored(JSONValue payload) {
+    return commonRequest(req_channel, Methods.get_stored, payload);
   }
+  public JSONValue getStored() { return getStored(JSONValue(null)); }
+  public JSONValue getStored(ushort id) { return getStored(JSONValue(id)); }
+  public JSONValue getStored(ushort[] id) { return getStored(JSONValue(id)); }
+  public JSONValue getStored(int id) { return getStored(JSONValue(id)); }
+  public JSONValue getStored(int[] id) { return getStored(JSONValue(id)); }
+  public JSONValue getStored(string id) { return getStored(JSONValue(id)); }
+  public JSONValue getStored(string[] id) { return getStored(JSONValue(id)); }
 
-  public JSONValue getValue() {
-    JSONValue payload = null;
-
-    return commonRequest(req_channel, "get value", payload);
+  public JSONValue readValue(JSONValue payload) {
+    return commonRequest(req_channel, Methods.read_value, payload);
   }
-  public JSONValue getValue(ushort id) {
-    JSONValue payload = id;
+  public JSONValue readValue(ushort id) { return readValue(JSONValue(id)); }
+  public JSONValue readValue(ushort[] id) { return readValue(JSONValue(id)); }
+  public JSONValue readValue(int id) { return readValue(JSONValue(id)); }
+  public JSONValue readValue(int[] id) { return readValue(JSONValue(id)); }
+  public JSONValue readValue(string id) { return readValue(JSONValue(id)); }
+  public JSONValue readValue(string[] id) { return readValue(JSONValue(id)); }
 
-    return commonRequest(req_channel, "get value", payload);
+
+  public JSONValue setValue(JSONValue payload) {
+    return commonRequest(req_channel, Methods.set_value, payload);
   }
-  public JSONValue getValue(ushort[] id) {
-    JSONValue payload = id;
-
-    return commonRequest(req_channel, "get value", payload);
-  }
-  public JSONValue getStored(ushort id) {
-    JSONValue payload = id;
-
-    return commonRequest(req_channel, "get stored", payload);
-  }
-  public JSONValue getStored(ushort[] id) {
-    JSONValue payload = id;
-
-    return commonRequest(req_channel, "get stored", payload);
-  }
-
-  public JSONValue readValue(ushort id) {
-    JSONValue payload = id;
-
-    return commonRequest(req_channel, "read value", payload);
-  }
-  public JSONValue readValue(ushort[] id) {
-    JSONValue payload = id;
-
-    return commonRequest(req_channel, "read value", payload);
-  }
-
-  public JSONValue setValue(ushort id, JSONValue value) {
+  public JSONValue setValue(T, V)(T id, V value) {
     JSONValue payload = parseJSON("{}");
     payload["id"] = id;
     payload["value"] = value;
 
-    return commonRequest(req_channel, "set value", payload);
+    return setValue(payload);
   }
   // raw
-  public JSONValue setValue(ushort id, ubyte[] value) {
+  public JSONValue setValue(T, V: ubyte[])(T id, V value) {
     JSONValue payload = parseJSON("{}");
     payload["id"] = id;
     payload["raw"] = Base64.encode(value);
 
-    return commonRequest(req_channel, "set value", payload);
-  }
-  public JSONValue setValue(JSONValue values) {
-    return commonRequest(req_channel, "set value", values);
+    return setValue(payload);
   }
 
-  public JSONValue putValue(ushort id, JSONValue value) {
+  public JSONValue putValue(JSONValue payload) {
+    return commonRequest(req_channel, Methods.put_value, payload);
+  }
+  public JSONValue putValue(T, V)(T id, V value) {
     JSONValue payload = parseJSON("{}");
     payload["id"] = id;
     payload["value"] = value;
 
-    return commonRequest(req_channel, "put value", payload);
+    return putValue(payload);
   }
   // raw
-  public JSONValue putValue(ushort id, ubyte[] value) {
+  public JSONValue putValue(T, V: ubyte[])(T id, V value) {
     JSONValue payload = parseJSON("{}");
     payload["id"] = id;
     payload["raw"] = Base64.encode(value);
 
-    return commonRequest(req_channel, "put value", payload);
-  }
-  public JSONValue putValue(JSONValue values) {
-    return commonRequest(req_channel, "put value", values);
+    return putValue(payload);
   }
 
   public JSONValue getServerItems() {
     JSONValue payload = null;
-
-    return commonRequest(req_channel, "get server items", payload);
+    return commonRequest(req_channel, Methods.get_server_items, payload);
   }
   
   public JSONValue getProgrammingMode() {
     JSONValue payload = null;
-
-    return commonRequest(req_channel, "get programming mode", payload);
+    return commonRequest(req_channel, Methods.get_programming_mode, payload);
   }
 
-  public JSONValue setProgrammingMode(bool value) {
+  public JSONValue setProgrammingMode(JSONValue value) {
     JSONValue payload = value;
 
-    return commonRequest(req_channel, "set programming mode", payload);
+    return commonRequest(req_channel, Methods.set_programming_mode, payload);
   }
-  public JSONValue setProgrammingMode(ushort value) {
-    JSONValue payload = value;
-
-    return commonRequest(req_channel, "set programming mode", payload);
-  }
+  public JSONValue setProgrammingMode(bool value) { return setProgrammingMode(JSONValue(value)); }
+  public JSONValue setProgrammingMode(int value) { return setProgrammingMode(JSONValue(value)); }
 
   // service methods
   public JSONValue getVersion() {
     JSONValue payload = null;
-
-    return commonRequest(req_channel, "version", payload);
+    return commonRequest(req_channel, Methods.get_version, payload);
   }
 
   public JSONValue reset() {
     JSONValue payload = null;
-
-    return commonRequest(req_channel, "reset", payload);
+    return commonRequest(req_channel, Methods.reset, payload);
   }
 }
